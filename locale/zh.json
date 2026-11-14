@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Trae Relay 用量",
+    "description": "读取本地 Trae Relay 的账号积分、今日 Token 与请求流水，在会话标题栏和侧边栏底部显示用量面板。"
+  }
+}

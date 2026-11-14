@@ -1,0 +1,37 @@
+{
+  "name": "dsh-trae-relay-usage",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "读取本地 Trae Relay 的账号积分、今日 Token 与请求流水，在会话标题栏和侧边栏底部显示用量面板。",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "license": "MIT"
+}

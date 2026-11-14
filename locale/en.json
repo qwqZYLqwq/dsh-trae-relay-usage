@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Trae Relay Usage",
+    "description": "Reads the local Trae Relay's account credits, today's tokens and request ledger, and shows a usage panel in the session header and at the sidebar foot."
+  }
+}

@@ -1,0 +1,9 @@
+# dsh-trae-relay-usage bundle patch.
+#
+# 一行 insert 挂载 Host 半身（读取 Trae Relay 的 config.json / usage 账本并查询
+# /v1/status）；浏览器半身由 package.json 的 dsh.client 声明，并绑定在 name 为
+# 裸包名的这一行上。
+- insert:
+    - id: trae-relay-usage
+      name: 'dsh-trae-relay-usage'
+      config: {}
