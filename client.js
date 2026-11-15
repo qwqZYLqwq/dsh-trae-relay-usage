@@ -59,6 +59,13 @@ window.__ModuleLoader__.load({
         'seg.total': '累计',
         tokens: 'Token',
         credits: '积分消耗',
+        cost: '预估花费',
+        'rate.peakShort': '高峰价',
+        'rate.offPeakShort': '空闲价',
+        'rate.peak': '高峰时段',
+        'rate.offPeak': '空闲时段',
+        'rate.unit': '单位 元/百万 tokens（缓存命中/未命中/输出）',
+        'col.cost': '花费',
         requests: '请求',
         cacheHit: '缓存命中',
         endpoint: '本地端点',
@@ -74,11 +81,9 @@ window.__ModuleLoader__.load({
         'col.time': '时间',
         'col.model': '模型',
         'col.tokens': 'Token',
-        'col.credits': '积分',
         'col.ms': '耗时',
         dataDir: '数据目录',
         updated: '更新于',
-        partial: '积分待回填',
         dayCount: '有记录天数',
         files: '账本文件',
         aria: 'Trae Relay 用量',
@@ -112,6 +117,13 @@ window.__ModuleLoader__.load({
         'seg.total': 'All time',
         tokens: 'Tokens',
         credits: 'Credits used',
+        cost: 'Est. cost',
+        'rate.peakShort': 'Peak',
+        'rate.offPeakShort': 'Off-peak',
+        'rate.peak': 'Peak hours',
+        'rate.offPeak': 'Off-peak hours',
+        'rate.unit': 'CNY per million tokens (cache hit / miss / output)',
+        'col.cost': 'Cost',
         requests: 'Requests',
         cacheHit: 'Cache hits',
         endpoint: 'Local endpoint',
@@ -127,11 +139,9 @@ window.__ModuleLoader__.load({
         'col.time': 'Time',
         'col.model': 'Model',
         'col.tokens': 'Tokens',
-        'col.credits': 'Credits',
         'col.ms': 'Took',
         dataDir: 'Data dir',
         updated: 'Updated',
-        partial: 'Credits pending',
         dayCount: 'Days recorded',
         files: 'Ledger files',
         aria: 'Trae Relay usage',
@@ -163,6 +173,19 @@ window.__ModuleLoader__.load({
       const amount = Number(value)
       if (!Number.isFinite(amount) || amount <= 0) return '--'
       return amount >= 1000 ? `${(amount / 1000).toFixed(1)}s` : `${Math.round(amount)}ms`
+    }
+
+    /**
+     * Money is quoted in CNY. Below one yuan three decimals keep small requests
+     * from all reading "0.00"; above it two decimals match a price list.
+     */
+    function formatMoney(value) {
+      const amount = Number(value)
+      if (!Number.isFinite(amount) || amount < 0) return '--'
+      if (amount === 0) return '¥0.00'
+      if (amount < 0.01) return `¥${amount.toFixed(4)}`
+      if (amount < 1) return `¥${amount.toFixed(3)}`
+      return `¥${amount.toFixed(2)}`
     }
 
     function formatClock(iso) {
@@ -307,6 +330,22 @@ window.__ModuleLoader__.load({
       const accounts = Array.isArray(data?.relay?.status?.accounts) ? data.relay.status.accounts : []
       const account = accounts[0]
       const online = data?.relay?.reachable === true
+      const pricing = data?.pricing
+      const peak = pricing?.peak === true
+      const rateTitle = pricing === undefined
+        ? ''
+        : `${t('rate.peak')} ¥${pricing.peakRate.cacheMiss}/¥${pricing.peakRate.cacheHit}/¥${pricing.peakRate.output} · ${t('rate.offPeak')} ¥${pricing.offPeakRate.cacheMiss}/¥${pricing.offPeakRate.cacheHit}/¥${pricing.offPeakRate.output} · ${t('rate.unit')}`
+      // The requested slot: today's token spend converted to CNY at DeepSeek's
+      // published deepseek-flash list price. It spans the full width under the
+      // credit figures so the money total reads as the summary of the row above.
+      const cost = h('div', { className: 'dtr-cost-row' },
+        h('span', { className: 'dtr-field-label' }, `${t('seg.today')} ${t('cost')}`),
+        h('span', { className: 'dtr-cost' },
+          formatMoney(data?.usage?.today?.cost),
+          h('span', {
+            className: peak ? 'dtr-rate dtr-rate-peak' : 'dtr-rate',
+            title: rateTitle,
+          }, peak ? t('rate.peakShort') : t('rate.offPeakShort'))))
       return h('section', { className: 'dtr-card' },
         h('header', { className: 'dtr-card-head' },
           h('span', { className: 'dtr-card-title' }, t('acct.current')),
@@ -330,7 +369,8 @@ window.__ModuleLoader__.load({
                     Number(account.active) > 0 ? t('acct.active') : t('acct.idle'))),
                 h(Field, { label: t('acct.credits') }, formatCredits(account.credits)),
                 h(Field, { label: `${t('seg.today')} ${t('tokens')}` }, formatTokens(data?.usage?.today?.tokens)),
-                h(Field, { label: `${t('seg.today')} ${t('credits')}` }, formatCredits(data?.usage?.today?.credits)))))
+                h(Field, { label: `${t('seg.today')} ${t('credits')}` }, formatCredits(data?.usage?.today?.credits))),
+              cost))
     }
 
     function RangeCard(props) {
@@ -347,6 +387,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dtr-ranges' }, rows.map(row => h('div', { className: 'dtr-range', key: row.key },
           h('span', { className: 'dtr-range-label' }, row.label),
           h('span', { className: 'dtr-range-value' }, formatTokens(row.bucket?.tokens)),
+          h('span', { className: 'dtr-range-cost' }, formatMoney(row.bucket?.cost)),
           h('span', { className: 'dtr-range-note' }, `${formatCredits(row.bucket?.credits)} · ${Number(row.bucket?.requests) || 0} ${t('requests')}`)))),
         h('div', { className: 'dtr-metrics' },
           h(Metric, { label: t('cacheHit'), value: formatTokens(usage.total?.cache), note: cacheRate(usage.total) }),
@@ -387,14 +428,13 @@ window.__ModuleLoader__.load({
                 h('span', null, t('col.time')),
                 h('span', null, t('col.model')),
                 h('span', { className: 'dtr-num' }, t('col.tokens')),
-                h('span', { className: 'dtr-num' }, t('col.credits')),
+                h('span', { className: 'dtr-num' }, t('col.cost')),
                 h('span', { className: 'dtr-num' }, t('col.ms'))),
               recent.slice(0, 10).map((row, index) => h('div', { className: 'dtr-row', key: `${row.ts}-${index}` },
                 h('span', { className: 'dtr-mono' }, shortTime(row.ts)),
                 h('span', { className: 'dtr-model', title: String(row.model ?? '') }, String(row.model ?? '--')),
                 h('span', { className: 'dtr-num' }, formatTokens((Number(row.in) || 0) + (Number(row.out) || 0) + (Number(row.cache) || 0))),
-                h('span', { className: 'dtr-num' },
-                  row.known === false || row.known === 'false' ? t('partial') : formatCredits(row.delta)),
+                h('span', { className: 'dtr-num' }, formatMoney(row.cost)),
                 h('span', { className: 'dtr-num' }, formatMs(row.ms))))))
     }
 
@@ -575,7 +615,12 @@ window.__ModuleLoader__.load({
 .dtr-range{display:flex;flex-direction:column;gap:1px;min-width:0}
 .dtr-range-label{font-size:10px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
 .dtr-range-value{font-size:13px;font-variant-numeric:tabular-nums}
+.dtr-range-cost{font-size:11px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-brand-primary,#4f8cff)}
 .dtr-range-note{font-size:10px;color:var(--dsw-alias-label-secondary,#8a8a8a);font-variant-numeric:tabular-nums}
+.dtr-cost-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:1px;padding-top:7px;border-top:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))}
+.dtr-cost{display:inline-flex;align-items:baseline;gap:6px;font-size:15px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-brand-primary,#4f8cff)}
+.dtr-rate{padding:1px 5px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.32));font-size:9px;font-weight:400;line-height:1.5;color:var(--dsw-alias-label-secondary,#8a8a8a)}
+.dtr-rate-peak{border-color:var(--dsw-alias-state-warn-primary,rgba(217,154,31,.55));color:var(--dsw-alias-state-warn-primary,#d99a1f)}
 .dtr-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding-top:7px;border-top:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))}
 .dtr-metric{display:flex;flex-direction:column;gap:1px;min-width:0}
 .dtr-metric-label{font-size:10px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
@@ -587,7 +632,7 @@ window.__ModuleLoader__.load({
 .dtr-link{flex:0 0 auto;padding:0;border:0;background:transparent;color:var(--dsw-alias-brand-primary,#4f8cff);font:inherit;font-size:10px;cursor:pointer}
 .dtr-link:hover{text-decoration:underline}
 .dtr-table{display:flex;flex-direction:column;gap:2px}
-.dtr-row{display:grid;grid-template-columns:52px minmax(0,1fr) 54px 52px 44px;align-items:center;gap:6px;font-size:11px;font-variant-numeric:tabular-nums}
+.dtr-row{display:grid;grid-template-columns:52px minmax(0,1fr) 54px 58px 44px;align-items:center;gap:6px;font-size:11px;font-variant-numeric:tabular-nums}
 .dtr-row-head{color:var(--dsw-alias-label-secondary,#8a8a8a);font-size:10px}
 .dtr-row-head .dtr-num{text-align:right}
 .dtr-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
@@ -631,7 +676,7 @@ window.__ModuleLoader__.load({
     exports.name = 'trae-relay-usage'
     // Test seam for scripts/render.mjs: the panel is rendered headlessly with
     // fixture payloads, so the pure presentational parts have to be reachable.
-    exports.__test = { Panel, AccountCard, RangeCard, EndpointCard, RecentCard, formatTokens, formatCredits, formatMs, cacheRate, maskKey }
+    exports.__test = { Panel, AccountCard, RangeCard, EndpointCard, RecentCard, formatTokens, formatCredits, formatMoney, formatMs, cacheRate, maskKey }
     return module.exports
   },
 })

@@ -101,24 +101,26 @@ if (test === undefined) {
 }
 
 // ── fixtures ────────────────────────────────────────────────────────────────
-const bucket = (tokens, credits, requests, input, output, cache) => ({ tokens, credits, requests, input, output, cache })
+// `cost` is what the host half computes for the same tokens; kept here so the
+// render check exercises the money path with realistic magnitudes.
+const bucket = (tokens, credits, requests, input, output, cache, cost) => ({ tokens, credits, cost, requests, input, output, cache })
 const usage = {
-  today: bucket(20807386, 69.63, 192, 10603896, 200418, 10003072),
-  range7: bucket(20807386, 69.63, 192, 10603896, 200418, 10003072),
-  range30: bucket(40931948, 111.03, 319, 20909299, 259193, 19763456),
-  total: bucket(40931948, 111.03, 319, 20909299, 259193, 19763456),
+  today: bucket(20807386, 69.63, 192, 10603896, 200418, 10003072, 12.84),
+  range7: bucket(20807386, 69.63, 192, 10603896, 200418, 10003072, 12.84),
+  range30: bucket(40931948, 111.03, 319, 20909299, 259193, 19763456, 25.31),
+  total: bucket(40931948, 111.03, 319, 20909299, 259193, 19763456, 25.31),
   dayCount: 2,
   files: 2,
   recent: [
-    { ts: '2026-11-14 20:51:16', account: 'Trae-0298', model: 'deepseek-v4.1-flash', ep: '/v1/chat/completions', in: 87262, out: 126, cache: 86656, before: 3022.22, after: 3022.11, delta: 0.11, known: true, merged: false, ms: 2388, ok: true, enterprise: false },
-    { ts: '2026-11-14 20:44:32', account: 'Trae-0298', model: 'deepseek-v4.1-flash', ep: '/v1/chat/completions', in: 72597, out: 3824, cache: 71424, before: 3042.06, after: 3041.35, delta: 0.71, known: false, merged: true, ms: 29427, ok: true, enterprise: false },
+    { ts: '2026-11-14 20:51:16', account: 'Trae-0298', model: 'deepseek-v4.1-flash', ep: '/v1/chat/completions', in: 87262, out: 126, cache: 86656, before: 3022.22, after: 3022.11, delta: 0.11, known: true, merged: false, ms: 2388, ok: true, enterprise: false, cost: 0.00183 },
+    { ts: '2026-11-14 20:44:32', account: 'Trae-0298', model: 'deepseek-v4.1-flash', ep: '/v1/chat/completions', in: 72597, out: 3824, cache: 71424, before: 3042.06, after: 3041.35, delta: 0.71, known: false, merged: true, ms: 29427, ok: true, enterprise: false, cost: 0.01790 },
   ],
 }
 const emptyUsage = {
-  today: bucket(0, 0, 0, 0, 0, 0),
-  range7: bucket(0, 0, 0, 0, 0, 0),
-  range30: bucket(0, 0, 0, 0, 0, 0),
-  total: bucket(0, 0, 0, 0, 0, 0),
+  today: bucket(0, 0, 0, 0, 0, 0, 0),
+  range7: bucket(0, 0, 0, 0, 0, 0, 0),
+  range30: bucket(0, 0, 0, 0, 0, 0, 0),
+  total: bucket(0, 0, 0, 0, 0, 0, 0),
   dayCount: 0,
   files: 0,
   recent: [],
@@ -136,10 +138,24 @@ const online = {
     },
   },
   config: { host: '127.0.0.1', port: 8317, baseUrl: 'http://127.0.0.1:8317', apiKey: 'sk-trae-000000000000000000000000', allowAnyApiKey: true, allowLan: false },
+  pricing: {
+    model: 'deepseek-flash',
+    modelVersion: 'DeepSeek-V4.1-Flash-1017',
+    currency: 'CNY',
+    peak: false,
+    peakHours: [{ from: 9, to: 12 }, { from: 14, to: 18 }],
+    rate: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
+    peakRate: { cacheHit: 0.04, cacheMiss: 2, output: 8 },
+    offPeakRate: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
+  },
   usage,
 }
 const fixtures = {
   'ready/online': online,
+  'ready/peak': {
+    ...online,
+    pricing: { ...online.pricing, peak: true, rate: { cacheHit: 0.04, cacheMiss: 2, output: 8 } },
+  },
   'ready/offline': {
     ok: true, at: new Date().toISOString(), dataDir: '',
     relay: { baseUrl: 'http://127.0.0.1:8317', reachable: false, health: false, error: 'fetch failed', status: null },
@@ -226,6 +242,27 @@ if (test.cacheRate({ input: 100, cache: 25 }) === '25%') console.log('ok   cache
 else { failures += 1; console.error(`FAIL cacheRate: ${test.cacheRate({ input: 100, cache: 25 })}`) }
 if (test.maskKey('sk-trae-000000000000000000000000') === 'sk-trae-••••0000') console.log('ok   maskKey')
 else { failures += 1; console.error(`FAIL maskKey: ${test.maskKey('sk-trae-000000000000000000000000')}`) }
+
+// ── money formatting ────────────────────────────────────────────────────────
+const moneyCases = [
+  [0, '¥0.00'],
+  [0.00003, '¥0.0000'],
+  [0.00183, '¥0.0018'],
+  [0.01790, '¥0.018'],
+  [0.1234, '¥0.123'],
+  [1.5, '¥1.50'],
+  [12.84, '¥12.84'],
+  [1234.5, '¥1234.50'],
+  [-1, '--'],
+]
+for (const [input, expected] of moneyCases) {
+  const actual = test.formatMoney(input)
+  if (actual === expected) console.log(`ok   formatMoney(${input}) = ${actual}`)
+  else {
+    failures += 1
+    console.error(`FAIL formatMoney(${input}) = ${actual}, expected ${expected}`)
+  }
+}
 
 console.log('missing locale keys:', missing.size === 0 ? 'none' : [...missing].join(', '))
 if (missing.size !== 0) failures += 1

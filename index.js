@@ -193,8 +193,76 @@ async function readUsage(dataDir) {
   return { files, records }
 }
 
+// ── pricing ──────────────────────────────────────────────────────────────────
+// DeepSeek's published list price for deepseek-flash (the model the relay's
+// `deepseek-v4.1-flash` id is served by), in CNY per million tokens. Peak hours
+// are 09:00-12:00 and 14:00-18:00 Beijing time on weekdays; everything else,
+// including weekends and Chinese public holidays, is off-peak at half price.
+// https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+export const PRICING = {
+  model: 'deepseek-flash',
+  modelVersion: 'DeepSeek-V4.1-Flash-1017',
+  currency: 'CNY',
+  peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 },
+  offPeak: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
+  peakHours: [
+    { from: 9, to: 12 },
+    { from: 14, to: 18 },
+  ],
+  // Chinese public holidays fall outside peak hours in full. Kept as a small
+  // maintained list rather than a dependency; add a year when it is announced.
+  holidays: new Set([
+    '2026-01-01', '2026-01-02', '2026-01-03',
+    '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20', '2026-02-21',
+    '2026-04-04', '2026-04-05', '2026-04-06',
+    '2026-05-01', '2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05',
+    '2026-06-19', '2026-06-20', '2026-06-21',
+    '2026-09-25', '2026-09-26', '2026-09-27',
+    '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07',
+  ]),
+}
+
+/** Beijing time parts for one instant, independent of the host time zone. */
+function beijingParts(date) {
+  const shifted = new Date(date.getTime() + 8 * 3600_000)
+  return {
+    day: shifted.toISOString().slice(0, 10),
+    hour: shifted.getUTCHours(),
+    // 0 = Sunday. Peak pricing applies Monday through Friday only.
+    weekday: shifted.getUTCDay(),
+  }
+}
+
+/** Whether an instant is billed at the peak rate. */
+export function isPeak(date) {
+  const { day, hour, weekday } = beijingParts(date)
+  if (weekday === 0 || weekday === 6) return false
+  if (PRICING.holidays.has(day)) return false
+  return PRICING.peakHours.some(range => hour >= range.from && hour < range.to)
+}
+
+/**
+ * Cost of one request in CNY. `in` already includes the cached prefix, so the
+ * cache-miss share is the difference — charging both would double-count the hit.
+ */
+export function priceRequest(record, date) {
+  const input = toNumber(record?.in)
+  const output = toNumber(record?.out)
+  const cacheHit = Math.min(toNumber(record?.cache), input)
+  const cacheMiss = Math.max(0, input - cacheHit)
+  const rate = isPeak(date) ? PRICING.peak : PRICING.offPeak
+  return (cacheHit * rate.cacheHit + cacheMiss * rate.cacheMiss + output * rate.output) / 1_000_000
+}
+
+/** Ledger timestamps are local wall-clock text, e.g. "2026-11-14 20:17:37". */
+function recordDate(record) {
+  const text = String(record?.ts ?? '')
+  const parsed = new Date(text.replace(' ', 'T'))
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+}
+
 function blank() {
-  return { tokens: 0, credits: 0, requests: 0, input: 0, output: 0, cache: 0 }
+  return { tokens: 0, credits: 0, cost: 0, requests: 0, input: 0, output: 0, cache: 0 }
 }
 
 function accumulate(bucket, record) {
@@ -210,11 +278,13 @@ function accumulate(bucket, record) {
   const known = record?.known === true || record?.known === 'true'
   const delta = toNumber(record?.delta)
   if (known && delta > 0) bucket.credits += delta
+  bucket.cost += priceRequest(record, recordDate(record))
 }
 
 function merge(target, source) {
   target.tokens += source.tokens
   target.credits += source.credits
+  target.cost += source.cost
   target.requests += source.requests
   target.input += source.input
   target.output += source.output
@@ -317,12 +387,23 @@ async function collect(force) {
   const usage = await readUsage(dataDir)
   const summary = summarize(usage.records)
   const relay = await readRelay(config)
+  const sampledAt = new Date()
   const value = {
     ok: true,
-    at: new Date().toISOString(),
+    at: sampledAt.toISOString(),
     dataDir,
     relay,
     config: relayConfig(config),
+    pricing: {
+      model: PRICING.model,
+      modelVersion: PRICING.modelVersion,
+      currency: PRICING.currency,
+      peak: isPeak(sampledAt),
+      peakHours: PRICING.peakHours,
+      rate: isPeak(sampledAt) ? PRICING.peak : PRICING.offPeak,
+      peakRate: PRICING.peak,
+      offPeakRate: PRICING.offPeak,
+    },
     usage: {
       today: summary.today,
       range7: summary.range7,
@@ -335,10 +416,16 @@ async function collect(force) {
       recent: usage.records
         .slice()
         .sort((left, right) => String(right?.ts ?? '').localeCompare(String(left?.ts ?? '')))
-        .slice(0, RECENT_LIMIT),
+        .slice(0, RECENT_LIMIT)
+        .map(record => ({
+          ...record,
+          // Per-row estimate so the recent list can show the same money figure
+          // the buckets are summed from.
+          cost: priceRequest(record, recordDate(record)),
+        })),
     },
   }
-  cache = { at: now, value }
+  cache = { at: sampledAt.getTime(), value }
   return value
 }
 
